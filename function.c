@@ -1,102 +1,168 @@
-#include <header.h>
+#include "function.h"
 
-int ftp_get(int soc, char* file_name){
-    FILE *fp;//fajl sa kojim manipulisem
-    fp = fopen(file_name, "w+"); //otvaranje i pisanje 
-    if(fp == NULL){ //ako je fajl prazan
-        printf("The file %s is not existed\n", file_name);
-		close(soc);
-        return 0;
-    }else{
-		char buffer[FTP_BUF_SIZE];
-		bzero(buffer, FTP_BUF_SIZE);
-        int file_block_length = 0;
-        while ((file_block_length = recv(soc, buffer, FTP_BUF_SIZE, 0)) > 0) 
-        {
-            if (file_block_length < 0) //ako je duzina fajla manja od nula onda je prazan,i postavljam gresku
-            {
-                printf("Recieve Data From Client Failed!\n");
-                return 0;
-            }
-            int write_length = fwrite(buffer, sizeof(char), file_block_length, fp);//pisanje u fajl
-            if (write_length < file_block_length){
-                printf("File: %s Write Failed\n", file_name);
-                break;
-            }
-            bzero(buffer, FTP_BUF_SIZE);
-        }
-        fclose(fp);//zatvaranje fajla
-        printf("File: %s Transfer Finished\n", file_name);
-    
-    	close(soc);
+
+/**
+ * Create listening socket on remote host
+ * Returns -1 on error, socket fd on success
+ */
+int socket_create(int port)
+{
+	int sockfd;
+	int yes = 1;
+	struct sockaddr_in sock_addr;
+
+	// create new socket
+	if ((sockfd = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
+		perror("socket() error"); 
+		return -1; 
 	}
-	return 1;
+
+	// set local address info
+	sock_addr.sin_family = AF_INET;
+	sock_addr.sin_port = htons(port);
+	sock_addr.sin_addr.s_addr = htonl(INADDR_ANY);		
+
+	if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(int)) == -1) {
+		close(sockfd);
+		perror("setsockopt() error");
+		return -1; 
+	}
+
+	// bind
+	if (bind(sockfd, (struct sockaddr *) &sock_addr, sizeof(sock_addr)) < 0) {
+		close(sockfd);
+		perror("bind() error"); 
+		return -1; 
+	}
+   
+	// begin listening for incoming TCP requests
+	if (listen(sockfd, 5) < 0) {
+		close(sockfd);
+		perror("listen() error");
+		return -1;
+	}              
+	return sockfd;
 }
 
-int ftp_put(int soc, char* file_name){
 
-    FILE *file;
-    file = fopen(file_name, "rb+");
-    if(file == NULL){//fajl je prazan
-        printf("The file %s is not existed\n", file_name);
-		close(soc);
-     	return 0;
-    }
 
-    int file_len;
-    fseek(file, 0, SEEK_END);//stavljam na kraj fajla 0 bajtova
-    file_len = ftell(file); //odredjujem duzinu fajla
-    fseek(file, 0, SEEK_SET); 
 
-    int read_len; //citanje duzine
-    char read_buf[FTP_BUF_SIZE];
-    do{
-        read_len = fread(read_buf, sizeof(char), FTP_BUF_SIZE, file);
 
-        if (read_len > 0){
-            send(soc, read_buf, read_len, 0); //saljem poruku na server
-            file_len -= read_len;
-        }
-		bzero(read_buf, FTP_BUF_SIZE);
-    } while ((read_len > 0) && (file_len > 0));
+/**
+ * Create new socket for incoming client connection request
+ * Returns -1 on error, or fd of newly created socket
+ */
+int socket_accept(int sock_listen)
+{
+	int sockfd;
+	struct sockaddr_in client_addr;
+	socklen_t len = sizeof(client_addr);
 
-    fclose(file);
-	close(soc);
-	return 1;
-}
-
-int get_port(char *buffer_read) { //obradjivanje hostname i porta
-    char p1[10]; char p2[10]; 
-    int count = 0;int i; int j = 0; int k = 0; 
-    for(i = 0; buffer_read[i] != '.'; i++){
-        if(buffer_read[i] == ',') count++; 
-        if(count == 4){
-            i++;
-            while(buffer_read[i] != ','){
-                p1[j++] = buffer_read[i++];
-            } p1[j]= '\0';
-			count++;
-        }
-        if(count == 5){
-			i++;
-            while(buffer_read[i] != ')'){
-                p2[k++] = buffer_read[i++];
-            } p2[k]= '\0';
-        }
-    }
-    int new_port = atoi(p1)*256 + atoi(p2);  //dobijanje porta 
+	// Wait for incoming request, store client info in client_addr
+	sockfd = accept(sock_listen, (struct sockaddr *) &client_addr, &len);
 	
-    return new_port;
+	if (sockfd < 0) {
+		perror("accept() error"); 
+		return -1; 
+	}
+	return sockfd;
 }
 
-int get_port2(char *buffer_read) {
-    char p[10];
-    int count = 0;int i; int j = 0;
-    for(i = 0; buffer_read[i] != ' '; i++);i++;
-    for(; buffer_read[i] != '\n'; i++){
-        p[j++] = buffer_read[i];
-    } p[j] = 0;
-    
-    int new_port = atoi(p);
-    return new_port;
+
+
+
+/**
+ * Connect to remote host at given port
+ * Returns:	socket fd on success, -1 on error
+ */
+int socket_connect(int port, char*host)
+{
+	int sockfd;  					
+	struct sockaddr_in dest_addr;
+
+	// create socket
+	if ((sockfd = socket(AF_INET, SOCK_STREAM, 0)) < 0) { 
+        	perror("error creating socket");
+        	return -1;
+    }
+
+	// create server address
+	memset(&dest_addr, 0, sizeof(dest_addr));
+	dest_addr.sin_family = AF_INET;
+	dest_addr.sin_port = htons(port);
+	dest_addr.sin_addr.s_addr = inet_addr(host);
+
+	// Connect on socket
+	if(connect(sockfd, (struct sockaddr *)&dest_addr, sizeof(dest_addr)) < 0 ) {
+        	perror("error connecting to server");
+		return -1;
+    	}    
+	return sockfd;
 }
+
+
+
+/**
+ * Receive data on sockfd
+ * Returns -1 on error, number of bytes received 
+ * on success
+ */
+int recv_data(int sockfd, char* buf, int bufsize){
+	size_t num_bytes;
+	memset(buf, 0, bufsize);
+	num_bytes = recv(sockfd, buf, bufsize, 0);
+	if (num_bytes < 0) {
+		return -1;
+	}
+	return num_bytes;
+}
+
+
+
+
+/**
+ * Trim whiteshpace and line ending
+ * characters from a string
+ */
+void trimstr(char *str, int n)
+{
+	int i;
+	for (i = 0; i < n; i++) {
+		if (isspace(str[i])) str[i] = 0;
+		if (str[i] == '\n') str[i] = 0;
+	}
+}
+
+
+/**
+ * Send resposne code on sockfd
+ * Returns -1 on error, 0 on success
+ */
+int send_response(int sockfd, int rc)
+{
+	int conv = htonl(rc);
+	if (send(sockfd, &conv, sizeof conv, 0) < 0 ) {
+		perror("error sending...\n");
+		return -1;
+	}
+	return 0;
+}
+
+
+
+
+/** 
+ * Read input from command line
+ */
+void read_input(char* buffer, int size)
+{
+	char *nl = NULL;
+	memset(buffer, 0, size);
+
+	if ( fgets(buffer, size, stdin) != NULL ) {
+		nl = strchr(buffer, '\n');
+		if (nl) *nl = '\0'; // truncate, ovewriting newline
+	}
+}
+
+

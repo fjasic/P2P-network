@@ -1,215 +1,415 @@
-#include <header.h>
-void error(const char *msg, int i){
-    perror(msg);
-    exit(i);
-}
+#include "header.h"
 
-int parseLine(char *line, char *command_array[]) {
-	char *p;
-	int count=0;
-	p = strtok(line, " "); // divide string into different pieces
-	while (p != 0 ) {
-		command_array[count++] = p;
-		p = strtok(NULL," ");// continue to divide the string if not empty
-	}
-	return count;
-}
+#define SEGMENT 16000 //approximate target size of small file
 
-int new_client(int data_sock){
-	listen(data_sock, 5);	//listen
-	int data_client;
-	struct sockaddr_in data_client_addr;
-	int llen = sizeof(data_client_addr);
-	data_client = accept(data_sock, (struct sockaddr*) &data_client_addr, (socklen_t *)&llen);
-	return data_client;
-}
+long file_size(char *name);//function definition below
 
-void get_name(char *file_name, char *a){
+int main(int argc, char *argv[])
+{	
+	int i, len, accum;
+    FILE *fp1, *fp2;
+	char largeFileName[]={"../sample.txt"};//change to your path
+    long sizeFile = file_size(largeFileName);
+    segments = sizeFile/SEGMENT + 1;//ensure end of file
+	char nameOfFile[260]={"smallFileName_"};
+    char line[1080];
 
-	int j = 0; int i;
-	for(i = 0; a[i] != '\r'; i++){
-		file_name[j++] = a[i];
-	} file_name[j] = 0;	
-
-}
-
-int main(int argc, char const *argv[])
-{
-	if(argc != 2) error("argument error!", 0);
-	int sockfd;
-	struct sockaddr_in serv_addr;
-	int port_num = atoi(argv[1]);
-
-	sockfd = socket(AF_INET, SOCK_STREAM, 0);
-	if (sockfd < 0) error("ERROR opening socket\n", 2);
-
-	serv_addr.sin_family = AF_INET;
-	serv_addr.sin_addr.s_addr = htonl(INADDR_ANY);
-	serv_addr.sin_port = htons(port_num);
-    	bzero(&(serv_addr.sin_zero), 8); // Flush the rest of struct
-
-	if (bind(sockfd, (struct sockaddr *) &serv_addr,
-              sizeof(serv_addr)) < 0) 
-       	error("ERROR on binding", 2);
-
-	listen(sockfd,5);	//listen
-	int client_sockfd;
-	struct sockaddr_in client_addr;
-	int len = sizeof(client_addr);
-	char buf[BUFFERSIZE] = {0};
-	// data socket
-	int data_sock;
-	int data_port_num = port_num;
-
-	while(1){
-		client_sockfd = accept(sockfd, (struct sockaddr*) &client_addr, (socklen_t *)&len);
-		if (client_sockfd < 0) {printf("ERROR on accept"); continue;}
-		sprintf(buf, "220 This is Filip Jasic's Ftp Server!\n");
-		send( client_sockfd, buf, (int)strlen(buf), 0);
-
-		int count = 0;
-		int i; 
-		int ftp_mode = PORT_MODE; 
-		
-		while(1){  // enter loop
-			bzero(buf, BUFFERSIZE);
-			char *command_array[4] = {0};
-	     	int result = read(client_sockfd, buf, BUFFERSIZE);
-			printf("received cmd: %s", buf);
-			if (result < 0) {printf("ERROR reading from socket\n"); close(client_sockfd); break;}
-			result = 0;
-			count = parseLine(buf, command_array);//??buf
-
-            if(strcmp(buf, "NLST\r\n") == 0){
-				
-				system("ls > ../tmp"); // ?ls ????tmp																						
-				FILE *fp = fopen("../tmp", "r");
-				fread(buf, sizeof(char), BUFFERSIZE, fp);
-				fclose(fp);
-				unlink("../tmp");	
-				result = send( client_sockfd, buf, (int)strlen(buf), 0);
-				
-            }else if(strcmp(command_array[0], "CWD") == 0){
-            	for(i = 0; command_array[1][i] != '\r'; i++); command_array[1][i] = '\0';
-            	if(chdir(command_array[1]) == 0){
-						char path[100];
-						getcwd(path, 100);
-						sprintf(buf,"250 change path succeed!\ncurrent path:\n%s\n",path);
-					}
-				else sprintf(buf, "450 ERROR wrong path\n");
-				result = send( client_sockfd, buf, (int)strlen(buf), 0);
-
-
-            }else if(strcmp(command_array[0], "DELE") == 0){
-            	for(i = 0; command_array[1][i] != '\r'; i++); command_array[1][i] = '\0';
-            	
-				if(remove(command_array[1]) == 0) sprintf(buf, "250 DELE file succeed!\n");
-				else sprintf(buf, "550 No such file!\n");
-				result = send( client_sockfd, buf, (int)strlen(buf), 0);
-
-            }else if(strcmp(buf, "PASV\r\n") == 0){
-         		sprintf(buf, "227 %d\n",++data_port_num);
-         		result = send( client_sockfd, buf, (int)strlen(buf), 0);
-         		ftp_mode = PASV_MODE;
-         		data_sock = socket(AF_INET, SOCK_STREAM, 0);
-				if (data_sock < 0) error("ERROR opening data socket\n", 2);
-         		serv_addr.sin_port = htons(data_port_num);
- 				if (bind(data_sock, (struct sockaddr *) &serv_addr,
-      					sizeof(serv_addr)) < 0) 
-   					error("ERROR on binding", 2);
-            }else if(strcmp(command_array[0], "STOR") == 0){
-            	char file_name[100]; 
-				get_name(file_name, command_array[1]);		
-				
-				if(ftp_mode != PASV_MODE){
-					sprintf(buf, "425 Please send PASV first!\n");
-					result = send( client_sockfd, buf, (int)strlen(buf), 0);
-				}else{ // new a socket
-					
-					int data_client = new_client(data_sock);
-					if (data_client < 0) {
-						printf("ERROR on accept data sock!\n");
-						sprintf(buf, "404 Error create data sock!\n");
-						result = send( client_sockfd, buf, (int)strlen(buf), 0);
-					}
-					else{ // send file
-						sprintf(buf, "150 start send file!\n");
-						result = send( client_sockfd, buf, (int)strlen(buf), 0);
-
-						ftp_get(data_client, file_name);
-						sprintf(buf, "226 Transfer complete!\n");
-						result = send( client_sockfd, buf, (int)strlen(buf), 0);
-					}
-					close(data_sock); //
-					ftp_mode = PORT_MODE;
-				}
-
-
-            }else if(strcmp(command_array[0], "RETR") == 0){
-				char file_name[100]; 
-				get_name(file_name, command_array[1]);
-				
-				if(ftp_mode != PASV_MODE){
-					sprintf(buf, "425 Please send PASV first!\n");
-					result = send( client_sockfd, buf, (int)strlen(buf), 0);
-				}else{ // new a socket
-					
-					int data_client = new_client(data_sock);
-					if (data_client < 0) {
-						printf("ERROR on accept data sock!\n");
-						sprintf(buf, "404 Error send failed!\n");
-						result = send( client_sockfd, buf, (int)strlen(buf), 0);
-					}
-					else{ // send file
-						sprintf(buf, "150 start send file!\n");
-						result = send( client_sockfd, buf, (int)strlen(buf), 0);
-						result = ftp_put(data_client, file_name);
-						if (result == 0){
-							sprintf(buf, "550 No such file!\n");
-							result = send( client_sockfd, buf, (int)strlen(buf), 0);
-						}else {
-							sprintf(buf, "226 Transfer complete!\n");
-							result = send( client_sockfd, buf, (int)strlen(buf), 0);
-						}
-					}
-					close(data_sock); //
-					ftp_mode = PORT_MODE;
-				}
-
-            }else if(strcmp(command_array[0], "USER") == 0){
-            	char file_name[100]; 
-				get_name(file_name, command_array[1]);
-				sprintf(buf, "220 Welcome %s no pass required!\n", file_name);
-				result = send(client_sockfd, buf, (int)strlen(buf), 0);
-				
-            }else if(strcmp(command_array[0], "PASS") == 0){
-				char file_name[100]; 
-				get_name(file_name, command_array[1]);
-				sprintf(buf, "220  %s won't be your pass!\n", file_name);
-				result = send(client_sockfd, buf, (int)strlen(buf), 0);
-
-            }else if(strcmp(buf, "QUIT\r\n") == 0){
-            	sprintf(buf, "221 GOODBYE!\n");
-				result = send(client_sockfd, buf, (int)strlen(buf), 0);
-            	close(client_sockfd);
-            	break;
-
-            }else{
-            	sprintf(buf, "500 Invalid wrong command\n");
-				result = send( client_sockfd, buf, (int)strlen(buf), 0);
-            }
-
-    		if (result < 0) {
-    			close(client_sockfd);
-    			printf("ERROR writing to socket!\n");
+    fp1 = fopen(largeFileName, "r");
+    if(fp1)
+    {
+        for(i=0;i<segments;i++)
+        {
+            accum = 0;
+            sprintf(smallFileName, "%s%d.txt", nameOfFile, i);
+            fp2 = fopen(smallFileName, "w");
+			checksum=0;
+			while (!feof(fp2) && !ferror(fp2)) 
+			{
+			checksum ^= fgetc(fp2);
+			printf("checksum is OK\n");
 			}
+			
+			if (size < 0 || checksum!=255) 
+			{
+				printf("error\n");
+			}
+            if(fp2)
+            {
+                while(fgets(line, 1080, fp1) && accum <= SEGMENT)
+                {
+                    accum += strlen(line);//track size of growing file
+                    fputs(line, fp2);
+                }
+                fclose(fp2);
+            }
+        }
+        fclose(fp1);
+    }
+	
+	
+	int sock_listen, sock_control, port, pid;
 
-
-	  	 }//while
+	if (argc != 2) {
+		printf("usage: ./ftserve port\n");
+		exit(0);
 	}
 
-	close(sockfd);
+	
+
+	port = atoi(argv[1]);
+
+	// create socket
+	if ((sock_listen = socket_create(port)) < 0 ) {
+		perror("Error creating socket");
+		exit(1);
+	}		
+	
+	while(1) {	// wait for client request
+
+		// create new socket for control connection
+		if ((sock_control = socket_accept(sock_listen))	< 0 )
+			break;			
+		
+		// create child process to do actual file transfer
+		if ((pid = fork()) < 0) { 
+			perror("Error forking child process");
+		} else if (pid == 0) { 
+			close(sock_listen);
+			ftserve_process(sock_control);
+			close(sock_control);
+			exit(0);
+		}
+			
+		close(sock_control);
+	}
+
+	close(sock_listen);	
+
 	return 0;
 }
+
+
+long file_size(char *name)
+{
+    FILE *fp = fopen(name, "rb"); //must be binary read to get bytes
+
+    long size=-1;
+    if(fp)
+    {
+        fseek (fp, 0, SEEK_END);
+        size = ftell(fp)+1;
+        fclose(fp);
+    }
+    return size;
+}
+/**
+ * Send file specified in filename over data connection, sending
+ * control message over control connection
+ * Handles case of null or invalid filename
+ */
+void ftserve_retr(int sock_control, int sock_data)
+{	
+	FILE* fd = NULL;
+	char data[MAXSIZE];
+	size_t num_read;							
+	char nameOfFile[260]={"smallFileName_"};
+	for(int i=0;i<segments;i++)
+	{
+	sprintf(smallFileName, "%s%d.txt", nameOfFile, i);
+	fd = fopen(smallFileName, "r");
+	if (!fd) {	
+		// send error code (550 Requested action not taken)
+		send_response(sock_control, 550);
+		
+	} else {	
+		// send okay (150 File status okay)
+		send_response(sock_control, 150);
+	
+		do {
+			num_read = fread(data, 1, MAXSIZE, fd);
+
+			if (num_read < 0) {
+				printf("error in fread()\n");
+			}
+
+			// send block
+			if (send(sock_data, data, num_read, 0) < 0)
+				perror("error sending file\n");
+
+		} while (num_read > 0);													
+			
+		// send message: 226: closing conn, file transfer successful
+		send_response(sock_control, 226);
+		}
+		fclose(fd);
+	}
+}
+
+
+
+
+
+/**
+ * Send list of files in current directory
+ * over data connection
+ * Return -1 on error, 0 on success
+ */
+int ftserve_list(int sock_data, int sock_control)
+{
+	char data[MAXSIZE];
+	size_t num_read;									
+	FILE* fd;
+
+	int rs = system("ls -1 smallFileName*txt | sort -t'_' -n -k2 >> tmp.txt");
+	if ( rs < 0) {
+		exit(1);
+	}
+	
+	fd = fopen("tmp.txt", "r");	
+	if (!fd) {
+		exit(1);
+	}
+
+	/* Seek to the beginning of the file */
+	fseek(fd, SEEK_SET, 0);
+
+	send_response(sock_control, 1); //starting
+
+	memset(data, 0, MAXSIZE);
+	while ((num_read = fread(data, 1, MAXSIZE, fd)) > 0) {
+		if (send(sock_data, data, num_read, 0) < 0) {
+			perror("err");
+		}
+		memset(data, 0, MAXSIZE);
+	}
+
+	fclose(fd);
+
+	send_response(sock_control, 226);	// send 226
+
+	return 0;	
+}
+
+
+
+
+
+
+/**
+ * Open data connection to client 
+ * Returns: socket for data connection
+ * or -1 on error
+ */
+int ftserve_start_data_conn(int sock_control)
+{
+	char buf[1024];	
+	int wait, sock_data;
+
+	// Wait for go-ahead on control conn
+	if (recv(sock_control, &wait, sizeof wait, 0) < 0 ) {
+		perror("Error while waiting");
+		return -1;
+	}
+
+	// Get client address
+	struct sockaddr_in client_addr;
+	socklen_t len = sizeof client_addr;
+	getpeername(sock_control, (struct sockaddr*)&client_addr, &len);
+	inet_ntop(AF_INET, &client_addr.sin_addr, buf, sizeof(buf));
+
+	// Initiate data connection with client
+	if ((sock_data = socket_connect(CLIENT_PORT_ID, buf)) < 0)
+		return -1;
+
+	return sock_data;		
+}
+
+
+
+
+
+/**
+ * Authenticate a user's credentials
+ * Return 1 if authenticated, 0 if not
+ */
+int ftserve_check_user(char*user, char*pass)
+{
+	char username[MAXSIZE];
+	char password[MAXSIZE];
+	char *pch;
+	char buf[MAXSIZE];
+	char *line = NULL;
+	size_t num_read;									
+	size_t len = 0;
+	FILE* fd;
+	int auth = 0;
+	
+	fd = fopen(".auth", "r");
+	if (fd == NULL) {
+		perror("file not found");
+		exit(1);
+	}	
+
+	while ((num_read = getline(&line, &len, fd)) != -1) {
+		memset(buf, 0, MAXSIZE);
+		strcpy(buf, line);
+		
+		pch = strtok (buf," ");
+		strcpy(username, pch);
+
+		if (pch != NULL) {
+			pch = strtok (NULL, " ");
+			strcpy(password, pch);
+		}
+
+		// remove end of line and whitespace
+		trimstr(password, (int)strlen(password));
+
+		if ((strcmp(user,username)==0) && (strcmp(pass,password)==0)) {
+			auth = 1;
+			break;
+		}		
+	}
+	free(line);	
+	fclose(fd);	
+	return auth;
+}
+
+
+
+
+
+/** 
+ * Log in connected client
+ */
+int ftserve_login(int sock_control)
+{	
+	char buf[MAXSIZE];
+	char user[MAXSIZE];
+	char pass[MAXSIZE];	
+	memset(user, 0, MAXSIZE);
+	memset(pass, 0, MAXSIZE);
+	memset(buf, 0, MAXSIZE);
+	
+	// Wait to recieve username
+	if ( (recv_data(sock_control, buf, sizeof(buf)) ) == -1) {
+		perror("recv error\n"); 
+		exit(1);
+	}	
+
+	int i = 5;
+	int n = 0;
+	while (buf[i] != 0)
+		user[n++] = buf[i++];
+	
+	// tell client we're ready for password
+	send_response(sock_control, 331);					
+	
+	// Wait to recieve password
+	memset(buf, 0, MAXSIZE);
+	if ( (recv_data(sock_control, buf, sizeof(buf)) ) == -1) {
+		perror("recv error\n"); 
+		exit(1);
+	}
+	
+	i = 5;
+	n = 0;
+	while (buf[i] != 0) {
+		pass[n++] = buf[i++];
+	}
+	
+	return (ftserve_check_user(user, pass));
+}
+
+
+
+
+
+/**
+ * Wait for command from client and
+ * send response
+ * Returns response code
+ */
+int ftserve_recv_cmd(int sock_control, char*cmd, char*arg)
+{	
+	int rc = 200;
+	char buffer[MAXSIZE];
+	
+	memset(buffer, 0, MAXSIZE);
+	memset(cmd, 0, 5);
+	memset(arg, 0, MAXSIZE);
+		
+	// Wait to recieve command
+	if ((recv_data(sock_control, buffer, sizeof(buffer)) ) == -1) {
+		perror("recv error\n"); 
+		return -1;
+	}
+	
+	strncpy(cmd, buffer, 4);
+	char *tmp = buffer + 5;
+	strcpy(arg, tmp);
+	
+	if (strcmp(cmd, "QUIT")==0) {
+		rc = 221;
+	} else if((strcmp(cmd, "USER")==0) || (strcmp(cmd, "PASS")==0) ||
+			(strcmp(cmd, "LIST")==0) || (strcmp(cmd, "RETR")==0)) {
+		rc = 200;
+	} else { //invalid command
+		rc = 502;
+	}
+
+	send_response(sock_control, rc);	
+	return rc;
+}
+
+/** 
+ * Child process handles connection to client
+ */
+void ftserve_process(int sock_control)
+{
+	int sock_data;
+	char cmd[5];
+	char arg[MAXSIZE];
+
+	// Send welcome message
+	send_response(sock_control, 220);
+
+	// Authenticate user
+	if (ftserve_login(sock_control) == 1) {
+		send_response(sock_control, 230);
+	} else {
+		send_response(sock_control, 430);	
+		exit(0);
+	}	
+	
+	while (1) {
+		// Wait for command
+		int rc = ftserve_recv_cmd(sock_control, cmd, arg);
+		
+		if ((rc < 0) || (rc == 221)) {
+			break;
+		}
+		
+		if (rc == 200 ) {
+			// Open data connection with client
+			if ((sock_data = ftserve_start_data_conn(sock_control)) < 0) {
+				close(sock_control);
+				exit(1); 
+			}
+
+			// Execute command
+			if (strcmp(cmd, "LIST")==0) { // Do list
+				ftserve_list(sock_data, sock_control);
+			} else if (strcmp(cmd, "RETR")==0) { // Do get <filename>
+				ftserve_retr(sock_control, sock_data);
+			}
+		
+			// Close data connection
+			close(sock_data);
+		} 
+	}
+}
+
+
 
 

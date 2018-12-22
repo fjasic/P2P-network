@@ -1,216 +1,364 @@
 #include "function.h"
+	
 
-char buffer_read[BUFFERSIZE];  //bafer odakle citamo
-char buffer_write[BUFFERSIZE];	//bafer u koji pisemo 
-char large_buff[BUFFERSIZE]; 
-char hostname[100];	//ovde smestam hostname
-int sockfd; 
-int data_sock; 
-int new_port = -1;
-struct sockaddr_in serv_addr; // socket info
+int sock_control; 
 
-void error(const char *msg, int i){  //poruka o gresci
-    perror(msg);
-    exit(i);
-}
 
-void change_type(char t){		
-	bzero(buffer_write, BUFFERSIZE); //bafer iz kog citam je prazan,postavlja sve na 0
-	sprintf(buffer_write ,"TYPE %c\r\n", t);//formatiranje bafera
-	send( sockfd, buffer_write, (int)strlen(buffer_write), 0);//inicijalizacija soketa 
-	parse();//razclanjivanje
-	bzero(buffer_write, BUFFERSIZE);//bafer u koji pisem je prazan,postavlja sve na 0
-}
-
-int parse() { 
-	int flag = 0; 
-	while(flag == 0) {
-		bzero(large_buff, BUFFERSIZE);
-		int result = recv( sockfd, large_buff, BUFFERSIZE, 0);
-		if (result < 0)  error("Error read", 5);
-		char *p = strtok(large_buff, "\n");//deli string na seriju tokena
-		while (p != 0 ) {
-			char *command;
-			command = p;
-			printf("%s\n",command);
-			if(command[3] == ' '){
-				char type[4];
-				strncpy(type, command, 4);//kopiram komandu
-				type[4] = 0;
-
-				flag = -1;
-				return atoi(type);
-			}
-			p = strtok(NULL,"\n");
-		}
-	}
-	return 0;
-}
-
-void pasv(){
-	int type;
-	bzero(buffer_read, BUFFERSIZE);
-	recv( sockfd, buffer_read, BUFFERSIZE, 0);//citanje sa soketa
-	printf("%s\n",buffer_read);
-	if(buffer_read[3] == ' '){//ako je 4 karakter prazan,tj komanda dolsa do kraja
-		char ctype[4];
-		strncpy(ctype, buffer_read, 4);
-		ctype[4] = 0;
-		type = atoi(ctype);//pretvara sting u integer
-	} else type = 0;
-
-	if( type == 227){
-		if(strcmp(hostname, "localhost") != 0){
-			new_port = get_port(buffer_read);
-		}else
-			new_port = get_port2(buffer_read);
-
-		data_sock = socket(AF_INET, SOCK_STREAM, 0);
-		if (data_sock < 0) error("ERROR opening data socket\n", 2);
-		serv_addr.sin_port = htons(new_port);
-		if(strcmp( hostname, "localhost") != 0) change_type('i');
-	}else new_port = -1;
+/**
+ * Receive a response from server
+ * Returns -1 on error, return code on success
+ */
+int read_reply(){
+	int retcode = 0;
+	if (recv(sock_control, &retcode, sizeof retcode, 0) < 0) {
+		perror("client: error reading message from server\n");
+		return -1;
+	}	
+	return ntohl(retcode);
 }
 
 
-int main(int argc, char const *argv[])
+
+/**
+ * Print response message
+ */
+void print_reply(int rc) 
 {
-	if(argc != 3) error("argument error!", 0);
-
-	struct hostent *host;		  // info hosta
-	int i;
-
-	//kreiranje socketa
-	sockfd = socket(AF_INET, SOCK_STREAM, 0);
-	if (sockfd < 0) error("ERROR opening socket\n", 2);
-
-	//dobijanje informacija o hostu 
-	serv_addr.sin_family = AF_INET;
-	host = gethostbyname(argv[1]);
-	strcpy(hostname, argv[1]);
-	if (host == NULL) error("ERROR, no such host\n", 0);
-	memcpy(&serv_addr.sin_addr.s_addr, host->h_addr, host->h_length); 
-
-	//dobijanje informacija o portu
-	serv_addr.sin_port = htons(atoi(argv[2]));
-	bzero(&(serv_addr.sin_zero), 8);
-
-	//uspostavljanje konekcije
-	if(connect(sockfd, (struct sockaddr *) &serv_addr, sizeof(serv_addr)) < 0)
-		error("ERROR connecting! \n", 3);
-
-	parse();
-
-	while(strcmp(buffer_write, "QUIT\r\n") != 0){ //sve dok mu nisam prosledio komandu QUIT,program nastavlja da radi
-		printf("ftp:$");
-		bzero(buffer_write, BUFFERSIZE);
-		fgets(buffer_write, BUFFERSIZE, stdin);
-
-		for(i = 0; buffer_write[i] != '\n'; i++); buffer_write[i] = '\0'; 
-		strcat(buffer_write, "\r\n");//citam sa ulaza
-
-		int result = send( sockfd, buffer_write, (int)strlen(buffer_write), 0); 
-		if (result < 0) error("Error write to serVer!\n", 4);
-
-		if(strncmp(buffer_write, "STOR ", 5) == 0){ //slanje podataka na server 
-			if(new_port != -1){
-				sleep(1);
-				if(connect(data_sock, (struct sockaddr *) &serv_addr, sizeof(serv_addr)) < 0)//ako se konekcija nije uspostavla salji gresku
-					printf("Error connecting data socket! \n");
-			}
-			int type = parse();
-		    if(type == 150){
-				// primanje fajlova
-				char filename[100]; int j = 0;
-				for(i = 0; buffer_write[i] != ' '; i++); i++;
-				for(; buffer_write[i] != '\r'; i++){
-					filename[j++] = buffer_write[i];
-				}filename[j] = 0;
-
-				sleep(1);
-				ftp_put(data_sock, filename);
-				type = parse();
-				close(data_sock);
-			}else if(type == 500){
-					parse();
-			}
-			new_port = -1;
-
-		}else if(strcmp(buffer_write, "PASV\r\n") == 0){ //pasivni rezim rezim
-			pasv();
-
-		}else if(strcmp(buffer_write, "NLST\r\n") == 0){//komanda za listanje datoteka na serveru
-			if(strcmp(hostname, "localhost") != 0){
-				if(new_port != -1){
-					sleep(1);
-					if(connect(data_sock, (struct sockaddr *) &serv_addr, sizeof(serv_addr)) < 0)
-						printf("Error connecting data socket! \n");
-				}
-				int type = parse();
-				if(type == 150){
-					int readCount;
-					do{
-						readCount = read(data_sock, buffer_read, BUFFERSIZE);
-						buffer_read[readCount] = 0; // !!!
-						printf("%s",buffer_read);
-					} while(readCount != 0);
-					close(data_sock);
-					parse();
-				}else if(type == 500){
-					parse(); 
-				}
-				new_port = -1;
-
-			}else {
-				result = recv( sockfd, buffer_read, BUFFERSIZE, 0);
-				if (result < 0)  error("Error read", 5);
-				printf("%s\n",buffer_read);
-			}
-		}else if(strncmp(buffer_write, "RETR ", 5) == 0){//skidanje podataka sa servera
-
-			if(new_port != -1){
-				sleep(1);
-				if(connect(data_sock, (struct sockaddr *) &serv_addr, sizeof(serv_addr)) < 0)
-					printf("Error connecting data socket! \n");
-			}
-			int type = parse();
-		    if(type == 150){
-				// primanje fajlova
-				char filename[100]; int j = 0;
-				for(i = 0; buffer_write[i] != ' '; i++); i++;
-				for(; buffer_write[i] != '\r'; i++){
-					filename[j++] = buffer_write[i];
-				}filename[j] = 0;
-				sleep(1);
-				ftp_get(data_sock, filename);
-				type = parse();
-				if(type == 550){
-					unlink(filename);
-					close(data_sock);
-					
-				}
-				else if(type == 226)
-					close(data_sock);
-			}else {
-				continue;
-			}
-			new_port = -1;
-
-		}else if(strncmp(buffer_write, "PASS", 4) == 0){ //sifra za korisnika
-
-		    if(parse() == 230)
-		    	continue;
-
-		}else if(strncmp(buffer_write, "QUIT\r\n", 4) == 0){ //odjavljivanje sa servera i kraj rada
-			parse();
+	switch (rc) {
+		case 220:
+			printf("220 Welcome, server ready.\n");
 			break;
+		case 221:
+			printf("221 Goodbye!\n");
+			break;
+		case 226:
+			printf("226 Closing data connection. Requested file action successful.\n");
+			break;
+		case 550:
+			printf("550 Requested action not taken. File unavailable.\n");
+			break;
+	}
+	
+}
 
-		}else{
-			parse();
-		}
 
+/**
+ * Parse command in cstruct
+ */ 
+int ftclient_read_command(char* buf, int size, struct command *cstruct)
+{
+	memset(cstruct->code, 0, sizeof(cstruct->code));
+	memset(cstruct->arg, 0, sizeof(cstruct->arg));
+	
+	printf("ftclient> ");	// prompt for input		
+	fflush(stdout); 	
+
+	// wait for user to enter a command
+	read_input(buf, size);
+		
+	char *arg = NULL;
+	arg = strtok (buf," ");
+	arg = strtok (NULL, " ");
+
+	if (arg != NULL){
+		// store the argument if there is one
+		strncpy(cstruct->arg, arg, strlen(arg));
 	}
 
-	close(sockfd);
+	// buf = command
+	if (strcmp(buf, "list") == 0) {
+		strcpy(cstruct->code, "LIST");		
+	}
+	else if (strcmp(buf, "get") == 0) {
+		strcpy(cstruct->code, "RETR");		
+	}
+	else if (strcmp(buf, "quit") == 0) {
+		strcpy(cstruct->code, "QUIT");		
+	}
+	else {//invalid
+		return -1;
+	}
+
+	// store code in beginning of buffer
+	memset(buf, 0, 400);
+	strcpy(buf, cstruct->code);
+
+	// if there's an arg, append it to the buffer
+	if (arg != NULL) {
+		strcat(buf, " ");
+		strncat(buf, cstruct->arg, strlen(cstruct->arg));
+	}
+	
 	return 0;
+}
+
+
+
+/**
+ * Do get <filename> command 
+ */
+int ftclient_get(int data_sock, int sock_control)
+{
+    char data[MAXSIZE];
+
+    FILE* fd = fopen("finished.txt", "w");
+    
+    while ((size = recv(data_sock, data, MAXSIZE, 0)) > 0) {
+        fwrite(data, 1, size, fd);
+    }
+	checksum=0;
+	while (!feof(fd) && !ferror(fd)) {
+	checksum ^= fgetc(fd);
+	printf("checksum is OK\n");
+	}
+	
+    if (size < 0 || checksum!=255) {
+        printf("error\n");
+    }
+
+    fclose(fd);
+	
+    return 0;
+}
+/**
+ * Open data connection
+ */
+int ftclient_open_conn(int sock_con)
+{
+	int sock_listen = socket_create(CLIENT_PORT_ID);
+
+	// send an ACK on control conn
+	int ack = 1;
+	if ((send(sock_con, (char*) &ack, sizeof(ack), 0)) < 0) {
+		printf("client: ack write error :%d\n", errno);
+		exit(1);
+	}		
+
+	int sock_conn = socket_accept(sock_listen);
+	close(sock_listen);
+	return sock_conn;
+}
+
+
+
+
+/** 
+ * Do list commmand
+ */
+int ftclient_list(int sock_data, int sock_con)
+{
+	size_t num_recvd;			// number of bytes received with recv()
+	char buf[MAXSIZE];			// hold a filename received from server
+	int tmp = 0;
+
+	// Wait for server starting message
+	if (recv(sock_con, &tmp, sizeof tmp, 0) < 0) {
+		perror("client: error reading message from server\n");
+		return -1;
+	}
+	
+	memset(buf, 0, sizeof(buf));
+	while ((num_recvd = recv(sock_data, buf, MAXSIZE, 0)) > 0) {
+        	printf("%s", buf);
+		memset(buf, 0, sizeof(buf));
+	}
+	
+	if (num_recvd < 0) {
+	        perror("error");
+	}
+
+	// Wait for server done message
+	if (recv(sock_con, &tmp, sizeof tmp, 0) < 0) {
+		perror("client: error reading message from server\n");
+		return -1;
+	}
+	return 0;
+}
+
+
+
+/**
+ * Input: cmd struct with an a code and an arg
+ * Concats code + arg into a string and sends to server
+ */
+int ftclient_send_cmd(struct command *cmd)
+{
+	char buffer[MAXSIZE];
+	int rc;
+
+	sprintf(buffer, "%s %s", cmd->code, cmd->arg);
+	
+	// Send command string to server
+	rc = send(sock_control, buffer, (int)strlen(buffer), 0);	
+	if (rc < 0) {
+		perror("Error sending command to server");
+		return -1;
+	}
+	
+	return 0;
+}
+
+
+
+/**
+ * Get login details from user and
+ * send to server for authentication
+ */
+void ftclient_login()
+{
+	struct command cmd;
+	char user[256];
+	memset(user, 0, 256);
+
+	// Get username from user
+	printf("Name: ");	
+	fflush(stdout); 		
+	read_input(user, 256);
+
+	// Send USER command to server
+	strcpy(cmd.code, "USER");
+	strcpy(cmd.arg, user);
+	ftclient_send_cmd(&cmd);
+	
+	// Wait for go-ahead to send password
+	int wait;
+	recv(sock_control, &wait, sizeof wait, 0);
+
+	// Get password from user
+	fflush(stdout);	
+	char *pass = getpass("Password: ");	
+
+	// Send PASS command to server
+	strcpy(cmd.code, "PASS");
+	strcpy(cmd.arg, pass);
+	ftclient_send_cmd(&cmd);
+	
+	// wait for response
+	int retcode = read_reply();
+	switch (retcode) {
+		case 430:
+			printf("Invalid username/password.\n");
+			exit(0);
+		case 230:
+			printf("Successful login.\n");
+			break;
+		default:
+			perror("error reading message from server");
+			exit(1);		
+			break;
+	}
+}
+
+
+
+
+
+int main(int argc, char* argv[]) 
+{		
+	int data_sock, retcode, s;
+	char buffer[MAXSIZE];
+	struct command cmd;	
+	struct addrinfo hints, *res, *rp;
+
+	if (argc != 3) {
+		printf("usage: ./ftclient hostname port\n");
+		exit(0);
+	}
+
+	char *host = argv[1];
+	char *port = argv[2];
+
+	// Get matching addresses
+	memset(&hints, 0, sizeof(struct addrinfo));
+	hints.ai_family = AF_UNSPEC;
+	hints.ai_socktype = SOCK_STREAM;
+	
+	s = getaddrinfo(host, port, &hints, &res);
+	if (s != 0) {
+		printf("getaddrinfo() error %s", gai_strerror(s));
+		exit(1);
+	}
+	
+	// Find an address to connect to & connect
+	for (rp = res; rp != NULL; rp = rp->ai_next) {
+		sock_control = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
+
+		if (sock_control < 0)
+			continue;
+
+		if(connect(sock_control, res->ai_addr, res->ai_addrlen)==0) {
+			break;
+		} else {
+			perror("connecting stream socket");
+			exit(1);
+		}
+		close(sock_control);
+	}
+	freeaddrinfo(rp);
+
+
+	// Get connection, welcome messages
+	printf("Connected to %s.\n", host);
+	print_reply(read_reply()); 
+	
+
+	/* Get name and password and send to server */
+	ftclient_login();
+
+	while (1) { // loop until user types quit
+
+		// Get a command from user
+		if ( ftclient_read_command(buffer, sizeof buffer, &cmd) < 0) {
+			printf("Invalid command\n");
+			continue;	// loop back for another command
+		}
+
+		// Send command to server
+		if (send(sock_control, buffer, (int)strlen(buffer), 0) < 0 ) {
+			close(sock_control);
+			exit(1);
+		}
+
+		retcode = read_reply();		
+		if (retcode == 221) {
+			/* If command was quit, just exit */
+			print_reply(221);		
+			break;
+		}
+		
+		if (retcode == 502) {
+			// If invalid command, show error message
+			printf("%d Invalid command.\n", retcode);
+		} else {			
+			// Command is valid (RC = 200), process command
+		
+			// open data connection
+			if ((data_sock = ftclient_open_conn(sock_control)) < 0) {
+				perror("Error opening socket for data connection");
+				exit(1);
+			}			
+			
+			// execute command
+			if (strcmp(cmd.code, "LIST") == 0) {
+				ftclient_list(data_sock, sock_control);
+			} 
+			else if (strcmp(cmd.code, "RETR") == 0) {
+				// wait for reply (is file valid)
+				if (read_reply() == 550) {
+					print_reply(550);		
+					close(data_sock);
+					continue; 
+				}
+				
+				ftclient_get(data_sock, sock_control);
+					print_reply(read_reply()); 
+			}
+			close(data_sock);
+		}
+
+	} // loop back to get more user input
+
+	// Close the socket (control connection)
+	close(sock_control);
+    return 0;  
 }

@@ -28,6 +28,6 @@ ${OBJSERVER}/%.o:	${SRCSERVER}/%.c
 clean:
 	rm -f ${OBJCLIENT}/*.o
 	rm -f ${OBJSERVER}/*.o
-	rm -f ${BINCLIENT}/*.out
-	rm -f ${BINSERVER}/*.out
+	rm -f ${BINCLIENT}/*
+	rm -f ${BINSERVER}/*
 
