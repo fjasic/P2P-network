@@ -320,7 +320,7 @@ int main(int argc, char* argv[])
 		}
 
 		retcode = read_reply();		
-		if (retcode == 221) {
+		if (retcode == 221 || retcode==150) {
 			/* If command was quit, just exit */
 			print_reply(221);		
 			break;
