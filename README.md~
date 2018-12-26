@@ -3,4 +3,7 @@ Program se kompajlira pokretanjem Makefile-a komandom make.Klijent se nalazi u b
 Pokretanje klijentske aplikacije vrsimo komandom ./C ime_hosta broj_porta.
 Pokretanje serverske aplikacije vrsimo komandom sudo ./S broj_porta.
 
+<<<<<<< HEAD
 
+=======
+>>>>>>> 2f54533c72dcc688301d74cc36b445b5da8f4817
